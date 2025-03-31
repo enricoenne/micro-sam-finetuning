@@ -34,7 +34,7 @@ segmentation_paths = sorted(glob(os.path.join(image_dir, "*/*_" + segmentation_g
 
 
 # Load images from multiple files in folder via pattern (here: all tif files)
-raw_key, label_key = "*_GFP_max.tif", "*_CELL_comb.tif"
+raw_key, label_key = "*_GFP_max.tif", "*_" + segmentation_gt + ".tif"
 
 # Alternative: if you have tif stacks you can just set 'raw_key' and 'label_key' to None
 # raw_key, label_key= None, None
@@ -106,7 +106,7 @@ n_epochs = 5  # how long we train (in epochs)
 model_type = "vit_t_lm"
 
 # The name of the checkpoint. The checkpoints will be stored in './checkpoints/<checkpoint_name>'
-checkpoint_name = "cell_comb"
+checkpoint_name = segmentation_gt
 
 # run training
 sam_training.train_sam(
@@ -161,10 +161,16 @@ assert os.path.exists(best_checkpoint), "Please train the model first to run inf
 assert train_instance_segmentation is True, "Oops. You didn't opt for finetuning using the decoder-based automatic instance segmentation."
 
 # Let's check the first 5 images. Feel free to comment out the line below to run inference on all images.
-image_paths = image_paths[:5]
+image_paths = image_paths[:10]
+
+oputput_dir = os.path.join('finetuning_test', checkpoint_name)
+if not os.path.exists(oputput_dir):
+    os.makedirs(oputput_dir)
 
 for image_path, segmentation_path in zip(image_paths, segmentation_paths):
-    image_name = image_path.split('/')[-2]
+    image_name = image_path.split('/')[-1][:-4]
+    seg_name = segmentation_path.split('/')[-1][:-4]
+    print(image_name)
     image = imageio.imread(image_path)
     segmentation = imageio.imread(segmentation_path)
 
@@ -174,11 +180,11 @@ for image_path, segmentation_path in zip(image_paths, segmentation_paths):
     )
 
     # Visualize the predictions
-    fig, ax = plt.subplots(1, 3, figsize=(10, 10))
+    fig, ax = plt.subplots(1, 3, figsize=(10, 6))
 
-    ax[0].imshow(image, cmap="gray")
+    ax[0].imshow(image, cmap="gray", vmin=np.amin(image), vmax=np.amax(image)/4)
     ax[0].axis("off")
-    ax[0].set_title("Input Image")
+    ax[0].set_title(image_name)
 
     ax[1].imshow(prediction, cmap=get_random_colors(prediction), interpolation="nearest")
     ax[1].axis("off")
@@ -186,7 +192,8 @@ for image_path, segmentation_path in zip(image_paths, segmentation_paths):
 
     ax[2].imshow(segmentation, cmap=get_random_colors(prediction), interpolation="nearest")
     ax[2].axis("off")
-    ax[2].set_title("ground truth")
+    ax[2].set_title(seg_name)
 
-    plt.show()
+    plt.savefig(os.path.join(oputput_dir, image_name + '.png'), bbox_inches='tight')
+    #plt.show()
     plt.close()
