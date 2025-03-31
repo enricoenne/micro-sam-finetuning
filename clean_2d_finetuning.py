@@ -24,40 +24,13 @@ from micro_sam.automatic_segmentation import get_predictor_and_segmenter, automa
 
 root_dir = ""
 
+segmentation_gt = 'CELL_comb'
+
 image_dir = '/group/jug/Enrico/TISSUE_roi_projection'
 image_paths = sorted(glob(os.path.join(image_dir, "*/*_GFP_max.tif")))
 
 segmentation_dir = '/group/jug/Enrico/TISSUE_roi_projection'
-segmentation_paths = sorted(glob(os.path.join(image_dir, "*/*_CELL_comb.tif")))
-
-# let's visualize how the samples look
-
-for image_path, segmentation_path in zip(image_paths, segmentation_paths):
-    image_name = image_path.split('/')[-2]
-    image = imageio.imread(image_path)
-    print(image.shape)
-    segmentation = imageio.imread(segmentation_path)
-    print(segmentation.shape)
-
-    fig, ax = plt.subplots(1, 2, figsize=(15, 8))
-
-    ax[0].imshow(image, cmap="gray", vmin=np.amin(image), vmax=np.amax(image)/4)
-    ax[0].set_title(image_name)
-    ax[0].axis("off")
-
-    segmentation = connected_components(segmentation)
-    ax[1].imshow(segmentation, cmap=get_random_colors(segmentation), interpolation="nearest")
-    ax[1].set_title("Ground Truth Instances")
-    ax[1].axis("off")
-
-    # save the figure
-    plt.tight_layout()
-    plt.savefig(os.path.join('data_summary', image_name + '.png'))
-
-    plt.show()
-    plt.close()
-
-    break  # comment this out in case you want to visualize all the images
+segmentation_paths = sorted(glob(os.path.join(image_dir, "*/*_" + segmentation_gt + ".tif")))
 
 
 # Load images from multiple files in folder via pattern (here: all tif files)
@@ -73,16 +46,6 @@ val_roi = np.s_[70:, :, :]'''
 # already splitted into two folders
 training_dir = os.path.join(image_dir, "training")
 validation_dir = os.path.join(image_dir, "validation")
-
-# normalization function
-from torch_em.transform.raw import normalize_percentile
-def normalization_8bit(image):
-    image = normalize_percentile(image)  # Use 1st and 99th percentile values for min-max normalization.
-    image = np.clip(image, 0, 1)  # Clip the values to be in range [0, 1].
-
-    image *= 255
-    image = image.astype(np.uint8)
-    return image
 
 # Here, we use `micro_sam.training.default_sam_loader` for creating a suitable data loader from
 # the example hela data. You can either adapt this for your own data or write a suitable torch dataloader yourself.
@@ -115,7 +78,7 @@ train_loader = sam_training.default_sam_loader(
     batch_size=batch_size,
     is_seg_dataset=True,
     shuffle=True,
-    raw_transform=normalization_8bit,
+    raw_transform=sam_training.identity,
     sampler=sampler,
 )
 
@@ -129,7 +92,7 @@ val_loader = sam_training.default_sam_loader(
     batch_size=batch_size,
     is_seg_dataset=True,
     shuffle=True,
-    raw_transform=normalization_8bit,
+    raw_transform=sam_training.identity,
     sampler=sampler,
 )
 
@@ -143,7 +106,7 @@ n_epochs = 5  # how long we train (in epochs)
 model_type = "vit_t_lm"
 
 # The name of the checkpoint. The checkpoints will be stored in './checkpoints/<checkpoint_name>'
-checkpoint_name = "sam_hela"
+checkpoint_name = "cell_comb"
 
 # run training
 sam_training.train_sam(
@@ -161,6 +124,69 @@ sam_training.train_sam(
 # Let's spot our best checkpoint and download it to get started with the annotation tool
 best_checkpoint = os.path.join("models", "checkpoints", checkpoint_name, "best.pt")
 
-# Download link is automatically generated for the best model.
-print("Click here \u2193")
-FileLink(best_checkpoint)
+
+def run_automatic_instance_segmentation(image, checkpoint_path, model_type="vit_b_lm", device=None):
+    """Automatic Instance Segmentation (AIS) by training an additional instance decoder in SAM.
+
+    NOTE: AIS is supported only for `µsam` models.
+
+    Args:
+        image: The input image.
+        checkpoint_path: The path to stored checkpoints.
+        model_type: The choice of the `µsam` model.
+        device: The device to run the model inference.
+
+    Returns:
+        The instance segmentation.
+    """
+    # Step 1: Get the 'predictor' and 'segmenter' to perform automatic instance segmentation.
+    predictor, segmenter = get_predictor_and_segmenter(
+        model_type=model_type, # choice of the Segment Anything model
+        checkpoint=checkpoint_path,  # overwrite to pass your own finetuned model.
+        device=device,  # the device to run the model inference.
+    )
+
+    # Step 2: Get the instance segmentation for the given image.
+    prediction = automatic_instance_segmentation(
+        predictor=predictor,  # the predictor for the Segment Anything model.
+        segmenter=segmenter,  # the segmenter class responsible for generating predictions.
+        input_path=image,
+        ndim=2,
+    )
+
+    return prediction
+
+
+assert os.path.exists(best_checkpoint), "Please train the model first to run inference on the finetuned model."
+assert train_instance_segmentation is True, "Oops. You didn't opt for finetuning using the decoder-based automatic instance segmentation."
+
+# Let's check the first 5 images. Feel free to comment out the line below to run inference on all images.
+image_paths = image_paths[:5]
+
+for image_path, segmentation_path in zip(image_paths, segmentation_paths):
+    image_name = image_path.split('/')[-2]
+    image = imageio.imread(image_path)
+    segmentation = imageio.imread(segmentation_path)
+
+    # Predicted instances
+    prediction = run_automatic_instance_segmentation(
+        image=image, checkpoint_path=best_checkpoint, model_type=model_type, device=device
+    )
+
+    # Visualize the predictions
+    fig, ax = plt.subplots(1, 3, figsize=(10, 10))
+
+    ax[0].imshow(image, cmap="gray")
+    ax[0].axis("off")
+    ax[0].set_title("Input Image")
+
+    ax[1].imshow(prediction, cmap=get_random_colors(prediction), interpolation="nearest")
+    ax[1].axis("off")
+    ax[1].set_title("Predictions (AIS)")
+
+    ax[2].imshow(segmentation, cmap=get_random_colors(prediction), interpolation="nearest")
+    ax[2].axis("off")
+    ax[2].set_title("ground truth")
+
+    plt.show()
+    plt.close()
