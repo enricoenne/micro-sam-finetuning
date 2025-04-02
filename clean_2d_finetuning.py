@@ -107,7 +107,7 @@ def finetuning_and_inference(raw_dataset, segmentation_gt, finetuning = True, in
     model_type = "vit_t_lm"
 
     # The name of the checkpoint. The checkpoints will be stored in './checkpoints/<checkpoint_name>'
-    checkpoint_name = segmentation_gt
+    checkpoint_name = raw_dataset + '---' + segmentation_gt
 
     # run training
     if finetuning:
@@ -163,7 +163,7 @@ def finetuning_and_inference(raw_dataset, segmentation_gt, finetuning = True, in
         assert train_instance_segmentation is True, "Oops. You didn't opt for finetuning using the decoder-based automatic instance segmentation."
 
         # Let's check the first 5 images. Feel free to comment out the line below to run inference on all images.
-        image_paths = image_paths[:10]
+        #image_paths = image_paths[:10]
 
         oputput_dir = os.path.join('finetuning_test', checkpoint_name)
         if not os.path.exists(oputput_dir):
@@ -184,7 +184,7 @@ def finetuning_and_inference(raw_dataset, segmentation_gt, finetuning = True, in
             # Visualize the predictions
             fig, ax = plt.subplots(1, 3, figsize=(10, 6))
 
-            ax[0].imshow(image, cmap="gray", vmin=np.amin(image), vmax=np.amax(image)/4)
+            ax[0].imshow(image, cmap="gray")
             ax[0].axis("off")
             ax[0].set_title(image_name)
 
@@ -196,7 +196,7 @@ def finetuning_and_inference(raw_dataset, segmentation_gt, finetuning = True, in
             ax[2].axis("off")
             ax[2].set_title(seg_name)
 
-            plt.savefig(os.path.join(oputput_dir, image_name + '.png'), bbox_inches='tight')
+            plt.savefig(os.path.join(oputput_dir, image_name + '_' + segmentation_gt + '.png'), bbox_inches='tight')
             #plt.show()
             plt.close()
 
@@ -204,4 +204,10 @@ def finetuning_and_inference(raw_dataset, segmentation_gt, finetuning = True, in
 raw = 'GFP_max'
 seg = 'CELL_comb'
 
-finetuning_and_inference(raw, seg)
+raw_ds = ['GFP_max', 'GFP_max_clahe']
+seg_ds = ['CELL_max', 'CELL_comb']
+
+
+for r in raw_ds:
+    for s in seg_ds:
+        finetuning_and_inference(r, s)
