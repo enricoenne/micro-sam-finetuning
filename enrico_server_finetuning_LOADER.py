@@ -11,15 +11,16 @@ import micro_sam.training as sam_training
 
 import albumentations as A
 
-from torch_em.util.debug import check_loader
+
 from torch.utils.data import Dataset
-from scipy.ndimage import binary_erosion
 import numpy as np
 from skimage.measure import label
 from skimage.io import imread
 import torch_em
 
 from torch.utils.data import DataLoader
+
+import matplotlib.pyplot as plt
 
 
 # create a torch dataset
@@ -32,7 +33,8 @@ class CellDataset(Dataset):
         crop_size=None,
         padding_size=8,
         with_segmentation_decoder=True,
-        augmentation=False):
+        augmentation=False,
+        min_size = 25):
 
       self.images = list(sorted(glob(image_dir)))
       self.masks = list(sorted(glob(mask_dir)))
@@ -42,44 +44,15 @@ class CellDataset(Dataset):
       self.with_segmentation_decoder = with_segmentation_decoder
       self.augmentation = augmentation
 
+      # minimum size of labels to be considered
+      self.min_size = min_size
+
       if len(self.images) == 0 or len(self.images) != len(self.masks):
-          raise Exception('something wrong with the directory')
+          raise Exception('(>_<)    something wrong with the directory')
 
 
     def __len__(self):
       return len(self.images)
-
-    # function to erode label boundaries
-    def erode(self, labels, iterations, border_value):
-
-      foreground = np.zeros_like(labels, dtype=bool)
-
-      # loop through unique labels
-      for label in np.unique(labels):
-
-          # skip background
-          if label == 0:
-              continue
-
-          # mask to label
-          label_mask = labels == label
-
-          # erode labels
-          eroded_mask = binary_erosion(
-                  label_mask,
-                  iterations=iterations,
-                  border_value=border_value)
-
-          # get foreground
-          foreground = np.logical_or(eroded_mask, foreground)
-
-      # and background...
-      background = np.logical_not(foreground)
-
-      # set eroded pixels to zero
-      labels[background] = 0
-
-      return labels
 
     # takes care of padding
     def get_padding(self, crop_size, padding_size):
@@ -109,14 +82,25 @@ class CellDataset(Dataset):
               A.HorizontalFlip(p=0.3),
               A.VerticalFlip(p=0.3),
               A.RandomRotate90(p=0.3),
-              A.Transpose(p=0.3),
-              A.RandomBrightnessContrast(p=0.3)
+              A.Transpose(p=0.3)
             ])
 
-        transformed 
-        transformed = transform(image=raw, mask=mask)
+        transformed = {'image': 0, 'mask': np.zeros((self.crop_size, self.crop_size), dtype=np.float32)}
+        lab_pixs = 0
+        num_labels = 1
+        check = 100
+        while (lab_pixs == 0 or lab_pixs < self.min_size*num_labels) and check > 0:
+            transformed = transform(image=raw, mask=mask)
+            lab_pixs = np.sum(transformed['mask']>0)
+            # we need the number of labels, ohterwise a lot of labels with small size might reach the min_size
+            num_labels = len(np.unique(transformed['mask'])) - 1
+            check -= 1
+
+        if check == 0:
+           raise Exception('(._.)    could not find a crop with labels')
 
         raw, mask = transformed['image'], transformed['mask']
+
 
         # I guess that the training and loader deals with 3d pictures, so it wants another axis
         if len(raw.shape) == 2:
@@ -125,40 +109,59 @@ class CellDataset(Dataset):
         
         return raw, mask
 
-    # normalize raw data between 0 and 1
+    
     def normalize(self, data):
-      return ((data - np.min(data)) / (np.max(data) - np.min(data))*255).astype(np.float32)
+        img_max = np.max(data)
+        img_min = np.min(data)
+
+
+        intensity_range = img_max - img_min
+        output = data - img_min
+        output = output / intensity_range
+        output = output.astype(np.float32)
+        output = output * 255
+
+
+        return output
+
 
     def __getitem__(self, idx):
+    
+        raw = self.images[idx]
+        labels = self.masks[idx]
 
-      raw = self.images[idx]
-      labels = self.masks[idx]
+        raw = imread(raw)
 
-      raw = imread(raw)
-      raw = self.normalize(raw)
-      
-      # slice first channel, relabel connected components
-      labels = label(imread(labels)).astype(np.uint16)
+        raw = self.normalize(raw)
 
-      padding = self.get_padding(self.crop_size, self.padding_size)
-      if self.augmentation:
-        raw, labels = self.augment_data(raw, labels, padding)
+        # slice first channel, relabel connected components
+        labels = label(imread(labels)).astype(np.uint16)
 
-      min_size = 25
-      if self.with_segmentation_decoder:
-        label_transform = torch_em.transform.label.PerObjectDistanceTransform(
-            distances=True,
-            boundary_distances=True,
-            directed_distances=False,
-            foreground=True,
-            instances=True,
-            min_size=min_size,
-        )
-      else:
-        label_transform = torch_em.transform.label.MinSizeLabelTransform(min_size=min_size)
-      labels = label_transform(labels).astype(np.float32)
+        padding = self.get_padding(self.crop_size, self.padding_size)
+        if self.augmentation:
+            raw, labels = self.augment_data(raw, labels, padding)
 
-      return raw, labels
+        
+        if self.with_segmentation_decoder:
+            label_transform = torch_em.transform.label.PerObjectDistanceTransform(
+                distances=True,
+                boundary_distances=True,
+                directed_distances=False,
+                foreground=True,
+                instances=True,
+                min_size=self.min_size,
+            )
+        else:
+            label_transform = torch_em.transform.label.MinSizeLabelTransform(min_size=self.min_size)
+        labels = label_transform(labels).astype(np.float32)
+
+        
+        fig, (plt_raw, plt_mask) = plt.subplots(1, 2)
+        plt_raw.imshow(raw[0], cmap='plasma')
+        plt_mask.imshow(labels[0], cmap='plasma')
+        plt.show()
+        
+        return raw, labels
 
 
 def finetuning(root_dir, raw_dataset, segmentation_gt, model):
@@ -195,7 +198,7 @@ def finetuning(root_dir, raw_dataset, segmentation_gt, model):
     sampler = MinInstanceSampler(min_size=25)  # NOTE: The choice of 'min_size' value is paired with the same value in 'min_size' filter in 'label_transform'.
 
     n_objects_per_batch = 1  # the number of objects per batch that will be sampled
-    crop_size = 800  # the size of patches
+    crop_size = 256  # the size of patches
 
     # train dataset and loader, with augmentation
     train_dataset = CellDataset(
@@ -263,12 +266,18 @@ args = parser.parse_args()
 
 r, s, m = args.raw, args.segmentation, args.model
 
+r = raw_ds[0]
+s = seg_ds[0]
+m = models[0]
+
 if (r not in raw_ds):
     raise Exception('raw not found')
 if (s not in seg_ds):
     raise Exception('segmentation not found')
 if (m not in models):
     raise Exception('model not present')
+
+
 
 print()
 print(f'finetuning {m} model with {r} images, gt is {s}')
