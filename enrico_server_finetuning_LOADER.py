@@ -88,7 +88,7 @@ class CellDataset(Dataset):
         transformed = {'image': 0, 'mask': np.zeros((self.crop_size, self.crop_size), dtype=np.float32)}
         lab_pixs = 0
         num_labels = 1
-        check = 100
+        check = 1000
         while (lab_pixs == 0 or lab_pixs < self.min_size*num_labels) and check > 0:
             transformed = transform(image=raw, mask=mask)
             lab_pixs = np.sum(transformed['mask']>0)
@@ -97,6 +97,7 @@ class CellDataset(Dataset):
             check -= 1
 
         if check == 0:
+           print(lab_pixs, num_labels)
            raise Exception('(._.)    could not find a crop with labels')
 
         raw, mask = transformed['image'], transformed['mask']
@@ -156,11 +157,6 @@ class CellDataset(Dataset):
         labels = label_transform(labels).astype(np.float32)
 
         
-        fig, (plt_raw, plt_mask) = plt.subplots(1, 2)
-        plt_raw.imshow(raw[0], cmap='plasma')
-        plt_mask.imshow(labels[0], cmap='plasma')
-        plt.show()
-        
         return raw, labels
 
 
@@ -192,13 +188,9 @@ def finetuning(root_dir, raw_dataset, segmentation_gt, model):
     # labels to the desired instances for finetuning Segment Anythhing, or, to learn the foreground and distances
     # to the object centers and object boundaries for automatic segmentation.
 
-    # There are cases where our inputs are large and the labeled objects are not evenly distributed across the image.
-    # For this we use samplers, which ensure that valid inputs are chosen subjected to the paired labels.
-    # The sampler chosen below makes sure that the chosen inputs have atleast one foreground instance, and filters out small objects.
-    sampler = MinInstanceSampler(min_size=25)  # NOTE: The choice of 'min_size' value is paired with the same value in 'min_size' filter in 'label_transform'.
 
     n_objects_per_batch = 1  # the number of objects per batch that will be sampled
-    crop_size = 256  # the size of patches
+    crop_size = 512  # the size of patches
 
     # train dataset and loader, with augmentation
     train_dataset = CellDataset(
@@ -220,7 +212,7 @@ def finetuning(root_dir, raw_dataset, segmentation_gt, model):
     # All hyperparameters for training.
 
     device = "cuda" if torch.cuda.is_available() else "cpu" # the device/GPU used for training
-    n_epochs = 5  # how long we train (in epochs)
+    n_epochs = 10  # how long we train (in epochs)
 
     # The model_type determines which base model is used to initialize the weights that are finetuned.
     # We use vit_b here because it can be trained faster. Note that vit_h usually yields higher quality results.
@@ -229,7 +221,7 @@ def finetuning(root_dir, raw_dataset, segmentation_gt, model):
     # The name of the checkpoint. The checkpoints will be stored in './checkpoints/<checkpoint_name>'
     checkpoint_name = model + '---' + raw_dataset + '---' + segmentation_gt
 
-    model_folder = 'microsam_models_TEST'
+    model_folder = 'microsam_models'
 
     if not os.path.exists(os.path.join(root_dir, model_folder)):
         os.makedirs(os.path.join(root_dir, model_folder))
@@ -266,9 +258,9 @@ args = parser.parse_args()
 
 r, s, m = args.raw, args.segmentation, args.model
 
-r = raw_ds[0]
+'''r = raw_ds[0]
 s = seg_ds[0]
-m = models[0]
+m = models[0]'''
 
 if (r not in raw_ds):
     raise Exception('raw not found')
@@ -276,7 +268,6 @@ if (s not in seg_ds):
     raise Exception('segmentation not found')
 if (m not in models):
     raise Exception('model not present')
-
 
 
 print()
